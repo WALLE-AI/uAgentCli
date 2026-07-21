@@ -1,6 +1,6 @@
 # Agent 平台通用技术架构图
 
-> 提炼自五份逐源码架构分析：`AionUi-architecture.md`（AionUi + AionCore）、`LobsterAI-architecture.md`（LobsterAI + OpenClaw）、`Rowboat-architecture.md`（Classic Rowboat + RowboatX）、`claude-code-架构流程图.md`（Claude Code）、`opencode深度技术架构解读报告.md`（OpenCode）。抽象为不绑定具体技术栈的「桌面/服务端 Agent 平台」通用分层架构，覆盖：**agent-run-loop、Tools（注册+工具集/CLI工具集）、技能池、上下文管理、记忆管理、渠道管理、心跳技术（定时+主动触发）、沙盒技术、权限/安全管理、知识库构建** 十大模块。
+> 提炼自五份逐源码架构分析：`AionUi-architecture.md`（AionUi + AionCore）、`LobsterAI-architecture.md`（LobsterAI + OpenClaw）、`Rowboat-architecture.md`（Classic Rowboat + RowboatX）、`claude-code-架构流程图.md`（Claude Code）、`opencode深度技术架构解读报告.md`（OpenCode）。抽象为不绑定具体技术栈的「桌面/服务端 Agent 平台」通用分层架构，覆盖：**agent-run-loop、Tools（注册+工具集/CLI工具集）、预置子智能体池、技能池、上下文管理、记忆管理、渠道管理、心跳技术（定时+主动触发）、沙盒技术、权限/安全管理、知识库构建** 十大模块（其中「预置子智能体池」是贯穿 ①Run Loop / ②Tools / ③技能池 三者的复合能力，单独成节说明，见 §2③+）。
 >
 > 五个参考项目分两类证据来源：**产品级拓扑证据**（AionUi/AionCore、LobsterAI/OpenClaw、Rowboat）——胖客户端 ⇄ 独立 Agent 后端/网关 ⇄（外部 CLI Agent | 内置执行引擎）⇄ LLM Provider / MCP / IM 渠道 / 知识库，解释"模块之间怎么连"；**单体引擎工程证据**（Claude Code、OpenCode）——两者都是被大规模生产验证过的单进程/单机 Agent 内核，代码可直接读到"Run Loop 到底怎么写、压缩到底怎么算、权限规则到底怎么合并"这类此前三个产品级项目里语焉不详或"预留但未实现"的细节，专门用来补齐**模块内部**的实现方案，尤其是此前标注为"两者均未实现，需自行设计"的几处空白（多端审批竞速、上下文压缩阈值算法、长期记忆分层）。
 
@@ -51,6 +51,7 @@ graph TB
         ContextMgr["④ 上下文管理<br/>压缩/分道/裁剪/Prompt 流水线"]
         MemoryMgr["⑤ 记忆管理<br/>短期会话态 + 长期向量记忆"]
         SkillPool["③ 技能池<br/>技能索引/发现/注入"]
+        SubAgentPool["③+ 预置子智能体池<br/>Explore/general-purpose/Plan…<br/>角色化工具集+权限收窄"]
         ToolRegistry["② Tools 注册与工具集<br/>Native/MCP/CLI/内置"]
         PermRouter["⑨ 权限/安全管理<br/>审批路由·风险分级·审计"]
         Sandbox["⑧ 沙盒技术<br/>执行隔离/资源限制"]
@@ -85,6 +86,10 @@ graph TB
     RunLoop --> ContextMgr
     RunLoop --> ToolRegistry
     RunLoop --> SkillPool
+    RunLoop --> SubAgentPool
+    SubAgentPool -.以 task/AgentTool 形式挂载.-> ToolRegistry
+    SubAgentPool -.受限复用.-> SkillPool
+    SubAgentPool -.派生收窄的规则.-> PermRouter
     RunLoop <--> MemoryMgr
     RunLoop --> PermRouter
     ToolRegistry --> Sandbox
@@ -188,6 +193,35 @@ graph TB
 | 条件/权限过滤                                | 条件技能（`paths:` 声明）——文件被触碰时才激活，不常驻上下文                                                                                 | `Skill.available(agent)` 按权限过滤，可把某类 agent 限定到技能子集                                                                                                                                            |
 
 **通用设计要点**：技能池与工具注册表是正交关系——技能是"面向任务场景的高层封装"，工具是"面向单一能力的原子调用"；技能被激活时应向 Run Loop 的 Prompt 流水线注入片段，而不是直接改代码路径，这样才能支持"运行期同步新增技能"；**系统提示词只放技能摘要（name/description），正文按需加载并经权限门控**——两个单体引擎独立收敛到这个模式，是此前文档遗漏的关键设计（否则技能数量增长会直接线性推高每轮基础 token 消耗）；技能的"是否可见"应可按 Agent 角色过滤（子 agent 只暴露其任务所需技能子集），而不是全局单一技能列表。
+
+### ③+ 预置子智能体池（Preset Sub-Agent Pool）
+
+**共性抽象**：平台预先注册一批"角色化子 Agent 配置"——**系统提示词模板 + 收窄后的工具子集 + 收窄后的权限默认值 + 可选模型覆盖**——供主 Agent 在运行中按需"起一个新会话"委派任务，而不是要求每次手写子 Agent 定义。它与③技能池的区别：技能是"任务片段，注入同一个循环"，预置子智能体是"开一个隔离的、独立生命周期的 Run Loop 实例"；子智能体运行时内部仍可使用①Run Loop/②Tools/③技能池/④上下文管理/⑨权限的全部机制，因此严格说不是第十一个独立模块，而是前三者的一种组合形态——本节单独成节是为了让"委派"这一常见交互模式有据可查。
+
+| 维度                     | AionUi/AionCore                                                                                                                        | LobsterAI/OpenClaw                                                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 与"预置角色子 Agent"最接近的实现 | `registry.rs` 的 `AgentRegistry` 只是"外部 CLI Agent 类型注册表"（Claude Code/Codex/Gemini CLI 等），本质是**引擎选择**而非"角色化子智能体"；团队协作场景走 `aionui-team-prompts` 系统提示词模板，配合 `IWorkerTaskManager` 派发给不同"团队成员"角色 | `Kits`（Expert Kits）是能力组合打包供上层调用；`extensions/acpx` 把外部 CLI Agent 桥接为"嵌入式子代理"，但这两者仍是"能力/引擎接入"而非"平台内置角色模板" |
+| 显式差距                 | 未见"探索型/规划型/执行型"这类**默认收窄工具集的预置角色**，委派主要靠切换引擎或团队角色提示词，工具集不随角色自动收窄                | 同上，`Kits`/`acpx` 均未见按角色自动收窄工具/权限的机制                                                                                |
+
+**Claude Code / OpenCode 补充参考**（两者是本文档五个参考项目中唯一把"预置子智能体"做成平台级、可配置、按角色收窄工具/权限的一等公民）：
+
+| 维度                       | Claude Code                                                                                                                                                                                                                                                     | OpenCode                                                                                                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 预置角色清单               | 内置目录 + `.claude/agents/*.md`（frontmatter 声明 `name/description/tools/model`）双来源合并；内置角色典型如 `Explore`（只读检索，禁 Edit/Write）、`general-purpose`（通用并行执行，工具全集）、`Plan`（架构规划，禁 Edit/Write，产出计划供确认）、`statusline-setup`（窄场景单任务角色，工具收窄到 `Read/Edit`） | `agent.ts` 内置 `build`（默认主 agent）、`plan`（拒绝一切 edit 类工具、拒绝再起 `task.general`）、`general`（通用并行子 agent）、`explore`（只读：base ruleset 先 `*:deny` 再放行 `grep/glob/read` 等）、`compaction`/`title`/`summary`（隐藏，内部专用） |
+| 委派机制                   | `AgentTool`：`call()`→`runAgent()` 返回 Message 异步迭代器（嵌套 query 引擎回合），子 agent 用受限工具集(`ASYNC_AGENT_ALLOWED_TOOLS`)，`createSubagentContext` 做状态隔离(`setAppState` no-op)，`queryTracking={chainId,depth}` 追踪递归深度                                                              | `task` 工具"把会话循环当工具用"：校验自身 `task` 权限→解析目标 agent→**派生受限子会话权限**（只继承父会话 `external_directory` 与 `deny` 规则，强制拒绝 `todowrite`/`task` 除非子 agent 显式放行）→建 `parentID=ctx.sessionID` 子会话→重新进入 session prompt 循环→结果包成 `<task .../>` XML |
+| 递归/失控防护              | 非高权限用户的 `AgentTool` 直接在 `ALL_AGENT_DISALLOWED_TOOLS` 禁用列表中，防止子 agent 无限递归再起子 agent；团队/协调场景下另有 `coordinator/coordinatorMode.ts` + `TeamCreateTool`/`SendMessageTool` 支持多 worker 协同（`AgentTool` 触发异步 worker，即 `local_agent` 后台任务） | 子 agent 权限默认不含 `task` 自身，需显式放行才能二级递归；`registry.tools(model, agent, permission)` 对 `task` 工具描述做**动态增补**——只列出该 agent 实际被允许 spawn 的子 agent 清单，而非静态全量暴露 |
+| 后台化与结果回传           | foreground agent 运行 **120s 后自动翻转为 `isBackgrounded`**，完成经 `enqueueTaskNotification` 生成 `<task-notification>` 回报领导 agent（§⑥心跳已述，此处是同一机制在"子智能体"场景下的复用）                                                                                                     | `task` 工具后台模式（标志门控）起 `BackgroundJob`，完成时向父会话**注入合成结果消息**，父会话循环下一轮即可读到                                                                                                        |
+
+RowboatX 的"后台 Agent"系统提供了第三种佐证角度：`bg-tasks/<slug>/task.yaml` 声明式配置的 Agent 按 **OUTPUT**（维护笔记）/**ACTION**（执行副作用）/**CODE MODE**（切隔离 git worktree 全自动跑 Claude Code/Codex）三种模式运行，同样是"预先声明角色 + 按角色收窄能力边界"的思路，但走的是磁盘配置文件而非代码内置清单，可作为"预置子智能体定义可配置化"的另一佐证。
+
+**通用设计要点**：
+
+1. 子智能体应作为 ②Tools 体系里的一种特例工具接入（`task`/`AgentTool`），不必另开一套编排框架；"委派"的本质是"起一个新的 Session/Run"，完整复用①Run Loop 的生命周期状态机与④上下文管理、⑨权限判定，差异只在**初始 System Prompt、初始工具集、初始权限规则**三处配置不同。
+2. 预置子智能体至少应覆盖三类角色，这是 Claude Code 与 OpenCode 两个独立技术栈收敛到的最小集：**只读探索型**（Explore/`explore`：工具集只放行 grep/glob/read 等只读操作，禁写禁 exec，用于定位代码/信息且不产生副作用）、**通用执行型**（general-purpose/`general`：工具集与主 agent 接近，用于可并行的子任务）、**规划型**（Plan/`plan`：禁一切编辑类工具，只产出计划供主 agent 或用户确认）。三者的核心差异不是提示词措辞，而是**工具/权限的默认收窄程度**。
+3. 子 agent 对外暴露的"可委派角色列表"应**按当前 agent 的实际权限动态生成**，而非静态硬编码全量列表（借鉴 OpenCode `registry.tools` 对 `task` 描述的动态增补）——否则一个本应受限的角色，反而可能召唤出权限更高的子智能体，绕过收窄设计的初衷。
+4. 子 agent 权限**只能收窄、不能放大**：默认继承父会话的 deny 规则与目录白名单；默认不含"再起子 agent"的能力（`task`/`AgentTool` 自身默认排除在子 agent 工具集之外），需要显式放行才能有限度地开二级递归，从设计上杜绝无限递归。
+5. 预置子智能体定义应支持"配置化扩展"而非硬编码在代码里：借鉴 Claude Code `.claude/agents/*.md`（frontmatter 声明 `name/description/tools/model`，按全局/项目目录发现）与 RowboatX `task.yaml`——子智能体定义可以和③技能池共用同一套"Markdown/YAML + frontmatter + 分层目录发现"机制，用户/团队能像加技能一样加自定义子智能体，无需改动核心代码。
+6. 子 agent 的执行需要与①Run Loop 的"前台/后台自动切换"、⑥心跳的任务通知机制打通：长时间运行的子 agent 应能自动后台化，完成时向父会话注入合成结果消息（而非阻塞主循环同步等待返回），这样"委派一个子智能体去跑，先继续处理别的事"才能真正落地。
 
 ### ④ 上下文管理（Context Management）
 
@@ -510,6 +544,7 @@ sequenceDiagram
 | ① Run Loop   | AionCore 双运行时路由、OpenClaw 压缩/分道/降级兜底；**Claude Code 的 9+6 种具名终止/续跑原因、OpenCode 的 `Runner` 单飞状态机**已给出"引导/中断"的落地方案                                                    | 多端同时在线的"引导"目前只解决了单会话层面（新请求加入在飞 drain），跨设备同时编辑同一会话状态的合并策略仍需细化                                                                        |
 | ② Tools      | AionCore 多 CLI adapter + 统一 Builder；OpenClaw 插件化 registerTool；**OpenCode `wrap()` 的输出截断+落盘+7天清理、Claude Code 的 fail-closed 默认值**补齐了工具执行侧的防爆机制                              | 工具"风险分级元数据"仍散落在审批策略里，没有独立的风险等级字段可供 Run Loop 规划阶段主动避让高危工具                                                                                    |
 | ③ 技能池     | 五者结构高度相似（发现→索引→Prompt 注入）；**Claude Code / OpenCode 的"渐进披露"（系统提示词只放摘要，正文按需加载+权限门控）**是比"直接注入全文"更优的默认方案                                                     | 技能与工具的显式依赖声明（技能声明"需要哪些工具"）仍未做强约束，多依赖运行时探测                                                                                                        |
+| ③+ 预置子智能体池 | **Claude Code `.claude/agents/*.md` + 内置目录（Explore/general-purpose/Plan…）、OpenCode 内置 `build/plan/general/explore` 四类角色**已给出"角色→工具收窄→权限收窄"的完整可落地方案；RowboatX `task.yaml` 提供配置化路线的佐证 | AionUi/LobsterAI/Rowboat 均无平台级"预置角色子智能体"，仅有引擎/能力接入层面的注册表；"子智能体角色市场"（社区共享/安装第三方角色定义）五者均未涉及，需自行设计发现与信任机制 |
 | ④ 上下文管理 | **Claude Code 的五阶段压缩管线+双阈值缓冲算法、OpenCode 的 Context Epoch/Prune 机制**是目前最系统、可直接复刻算法参数的实现                                                                                     | 阈值参数（缓冲区大小、保留轮数）需要按自身模型 context window 与业务场景重新标定，不能照搬数值                                                                                          |
 | ⑤ 记忆管理   | OpenClaw`memory-host-sdk`（向量记忆）、Rowboat 知识图谱笔记；**Claude Code 的三套记忆分层（自动记忆/会话记忆/团队记忆）+ Dream 整合**给出了迄今最完整的记忆分层方案                                           | 团队/多设备记忆同步的冲突合并策略（Claude Code 用"服务端优先"简化处理）在强一致性场景下可能不够用                                                                                       |
 | ⑥ 心跳技术   | AionCore`aionui-cron`、Rowboat `JobRulesWorker`；**Claude Code 的 1s 轮询+偏移量增量读取、120s 自动后台化**补齐了任务调度的工程细节                                                                         | **主动触发（基于监控/记忆的事件驱动）仍是五个参考项目共同的空白**，需要新建 Trigger Engine；Rowboat 的 Composio 触发器是距此最近的雏形                                            |
