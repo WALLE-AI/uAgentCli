@@ -1,0 +1,5 @@
+[
+  { "type": "text_delta", "text": "hello" },
+  { "type": "text_delta", "text": " world" },
+  { "type": "finish", "reason": "end_turn" }
+]

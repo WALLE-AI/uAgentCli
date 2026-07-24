@@ -1,0 +1,2 @@
+Delegate a task to a subagent and wait for its result.
+(Implementation not part of this iteration; see 迭代5 T5.1.)

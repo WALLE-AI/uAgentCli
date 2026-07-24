@@ -1,0 +1,5 @@
+[
+  { "choices": [{ "delta": { "content": "Hello" } }] },
+  { "choices": [{ "delta": { "content": " world" } }] },
+  { "choices": [{ "delta": {}, "finish_reason": "stop" }] }
+]

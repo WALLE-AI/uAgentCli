@@ -1,0 +1,4 @@
+Load a discovered skill's full instructions by name. The system prompt's
+<available_skills> block only lists name/description/location for each
+discovered skill (progressive disclosure) -- call this tool with that name
+to read its full SKILL.md body before following its instructions.

@@ -1,0 +1,2 @@
+Read a file from the local filesystem and return its contents. Supports an
+optional line offset and limit for large files.

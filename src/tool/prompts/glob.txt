@@ -1,0 +1,4 @@
+List files matching a glob pattern (supports `*`, `**`, `?`, `{a,b}`).
+Recursively scans files under the given path (default: current directory),
+skipping .git/node_modules/dist/coverage. Returns matching relative paths,
+sorted for deterministic output.

@@ -1,0 +1,4 @@
+Search file contents using a regular expression pattern. Recursively scans
+files under the given path (default: current directory), skipping
+.git/node_modules/dist/coverage. Returns matches as `file:line:content`.
+Prefer this over invoking `grep`/`rg` via the bash tool.

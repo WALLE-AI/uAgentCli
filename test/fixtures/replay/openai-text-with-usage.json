@@ -1,0 +1,4 @@
+[
+  { "choices": [{ "delta": { "content": "Hi" } }] },
+  { "choices": [{ "delta": {}, "finish_reason": "stop" }], "usage": { "prompt_tokens": 500, "completion_tokens": 3 } }
+]

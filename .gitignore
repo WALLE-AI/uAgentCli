@@ -1,2 +1,12 @@
-# 第三方开源项目分析源码，不纳入版本管理
+# 第三方开源项目分析源码，不纳入版本管理  
 opensource/
+
+# uAgentCli 工程构建产物与本地状态
+node_modules/
+dist/
+coverage/
+.env
+.uagent/settings.local.json
+agent-memory/
+sessions/
+

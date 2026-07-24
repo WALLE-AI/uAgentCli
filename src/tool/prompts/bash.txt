@@ -1,0 +1,3 @@
+Execute a shell command and return its stdout/stderr. Prefer read-only
+commands when possible. Long-running or destructive commands should be
+avoided unless explicitly required by the task.

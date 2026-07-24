@@ -1,0 +1,3 @@
+Replace an exact string occurrence in a file with a new string. Fails if the
+old string is not found, or if it is not unique and replace_all was not
+requested.
