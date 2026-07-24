@@ -59,4 +59,26 @@ describe('ToolRegistry', () => {
     const ruleset: Ruleset = { rules: [{ action: 'write', pattern: '*', decision: 'deny' }] };
     expect(registry.getTools(ruleset).map((t) => t.id)).toEqual(['read']);
   });
+
+  it('T7.2 统一 evaluate：glob pattern deny 生效（旧 ad-hoc 匹配做不到）', () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool('read')); // action read, id 'read'
+    registry.register(makeTool('grep')); // action read, id 'grep'
+    // 用 glob pattern 'gr*' deny：旧 isAllowed 只认 '*' 或精确 id，会漏；
+    // 统一到 evaluate()+globMatch 后应正确命中 grep。
+    const ruleset: Ruleset = { rules: [{ action: 'read', pattern: 'gr*', decision: 'deny' }] };
+    expect(registry.getTools(ruleset).map((t) => t.id).sort()).toEqual(['read']);
+  });
+
+  it('T7.2 last-match-wins：后置 allow 覆盖前置 deny（与 evaluate 一致）', () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool('bash'));
+    const ruleset: Ruleset = {
+      rules: [
+        { action: 'execute', pattern: '*', decision: 'deny' },
+        { action: 'execute', pattern: 'bash', decision: 'allow' },
+      ],
+    };
+    expect(registry.getTools(ruleset).map((t) => t.id)).toEqual(['bash']);
+  });
 });

@@ -2,7 +2,7 @@
 import readline from 'node:readline';
 import path from 'node:path';
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
-import Database from 'better-sqlite3';
+import { openDatabase } from '../storage/db.js';
 
 import { toSessionID } from '../types/ids.js';
 import type { RunContext } from '../types/abort.js';
@@ -230,7 +230,7 @@ async function bootstrap() {
   const skills = discoverSkills([path.join(cwd, '.agents', 'skills')]);
   const skillsVerboseText = formatSkills(skills, { verbose: true });
 
-  const memoryDb = new Database(path.join(home, 'memory.db'));
+  const memoryDb = openDatabase(path.join(home, 'memory.db'));
   const memoryStore = new LongTermMemoryStore(memoryDb);
   const memorySnapshotText = buildMemorySnapshotText(memoryStore);
 

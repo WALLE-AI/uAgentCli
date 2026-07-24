@@ -40,6 +40,36 @@ describe('redact', () => {
   });
 });
 
+describe('M0.6 redact 厂商正则 + 熵兜底', () => {
+  it('AWS AKIA / GitHub ghp_ / JWT / PEM', () => {
+    expect(redact('id AKIAIOSFODNN7EXAMPLE here')).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(redact('ghp_' + 'a'.repeat(36))).not.toContain('ghp_aaaa');
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123DEFxyz';
+    expect(redact(`tok ${jwt}`)).not.toContain(jwt);
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIabc123\n-----END RSA PRIVATE KEY-----';
+    expect(redact(pem)).toContain('[REDACTED_PRIVATE_KEY]');
+  });
+
+  it('Shannon 熵兜底：未知格式高熵 token 被脱敏', () => {
+    const secret = 'Zx9Qk2Lp7Vn4Rm8Ty6Wb3Fc5Hd1Jg0'; // 31 chars, 含字母数字, 高熵
+    const out = redact(`value: ${secret}`);
+    expect(out).toContain('[REDACTED_HIGH_ENTROPY_TOKEN]');
+    expect(out).not.toContain(secret);
+  });
+
+  it('protected span 豁免：URL / 长路径不被熵误伤', () => {
+    const url = 'https://example.com/path/aaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    expect(redact(url)).toBe(url);
+    const path = '/usr/local/share/some-long-directory-name-aaaaaaaa/file';
+    expect(redact(path)).toBe(path);
+  });
+
+  it('低熵长串（重复字符）不误报', () => {
+    const text = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; // 低熵，无数字
+    expect(redact(text)).toBe(text);
+  });
+});
+
 describe('redact enable flag is frozen at module load', () => {
   it('is enabled by default', async () => {
     delete process.env.UAGENT_REDACT_DISABLED;

@@ -1,10 +1,11 @@
 import type { Action, Ruleset } from '../permission/types.js';
+import { evaluate } from '../permission/evaluate.js';
 import type { ToolDef } from './types.js';
 
 /**
- * 工具 id → 权限 Action 的映射，仅用于本迭代的简单 allow-list 过滤。
- * 真正的 last-match-wins 判定链在迭代2 `permission/evaluate.ts` 实现，
- * 届时 `getTools()` 的过滤逻辑会被替换为调用 evaluate()。
+ * 工具 id → 权限 Action 的映射。这是纯粹的**声明映射**（哪个工具属于哪类
+ * 动作），不是判定逻辑——判定统一走 `permission/evaluate.ts` 的 last-match-wins
+ * 判定链（T7.2：消除 registry 自带的第二套 last-match 实现，避免语义漂移）。
  */
 export const TOOL_ACTION_MAP: Record<string, Action> = {
   read: 'read',
@@ -17,19 +18,16 @@ export const TOOL_ACTION_MAP: Record<string, Action> = {
   webfetch: 'read',
 };
 
+/**
+ * 工具是否对当前 ruleset 可见：以工具 id 为 pattern 跑 `evaluate()`，
+ * 判定为 `deny` 即隐藏。无匹配规则时 evaluate 返回默认 `ask`（非 deny）→ 可见。
+ */
 function isAllowed(def: ToolDef, ruleset: Ruleset): boolean {
   const action = TOOL_ACTION_MAP[def.id];
   if (!action) {
     return true;
   }
-  const matching = ruleset.rules.filter(
-    (rule) => rule.action === action && (rule.pattern === '*' || rule.pattern === def.id),
-  );
-  const last = matching[matching.length - 1];
-  if (!last) {
-    return true;
-  }
-  return last.decision !== 'deny';
+  return evaluate(action, def.id, ruleset).decision !== 'deny';
 }
 
 export class ToolRegistry {

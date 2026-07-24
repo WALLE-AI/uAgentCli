@@ -3,6 +3,8 @@ import type Database from 'better-sqlite3';
 
 import type { Message } from '../types/message.js';
 import type { Ruleset } from '../permission/types.js';
+import { migrate } from './db.js';
+import { PRODUCTION_MIGRATIONS } from './migrations.js';
 
 export interface SessionRecord {
   id: string;
@@ -89,39 +91,15 @@ function toMessageRecord(row: MessageRow): MessageRecord {
   };
 }
 
-/** 建表：与 `permission/persist.ts` 共用同一 SQLite 连接（调用方负责传入）。 */
+/**
+ * 建表：走 M0.1 的迁移框架（`PRODUCTION_MIGRATIONS`），单一事实源。
+ * 相比旧的内联 `CREATE TABLE`，message.session_id 现带外键
+ * `REFERENCES session(id) ON DELETE CASCADE`（配合 openDatabase 的
+ * `foreign_keys=ON` 生效），并附 keyset 分页索引。
+ * 与 `permission/persist.ts` / memory 等共用同一 SQLite 连接（调用方传入）。
+ */
 export function initSessionStore(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS session (
-      id TEXT PRIMARY KEY,
-      parent_session_id TEXT,
-      project_id TEXT NOT NULL,
-      agent TEXT NOT NULL,
-      model TEXT NOT NULL,
-      cwd TEXT NOT NULL,
-      title TEXT,
-      permission TEXT NOT NULL DEFAULT '{"rules":[]}',
-      tokens INTEGER NOT NULL DEFAULT 0,
-      cost REAL NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      archived INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE INDEX IF NOT EXISTS idx_session_project ON session(project_id);
-    CREATE INDEX IF NOT EXISTS idx_session_parent ON session(parent_session_id);
-
-    CREATE TABLE IF NOT EXISTS message (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      seq INTEGER NOT NULL,
-      tool_call_id TEXT,
-      tokens INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      active INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE INDEX IF NOT EXISTS idx_message_session ON message(session_id);
-  `);
+  migrate(db, PRODUCTION_MIGRATIONS);
 }
 
 export interface CreateSessionInput {

@@ -9,4 +9,4 @@ coverage/
 .uagent/settings.local.json
 agent-memory/
 sessions/
-
+.github/
